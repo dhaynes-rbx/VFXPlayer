@@ -35,6 +35,12 @@ local MeshParticleDriver = {
 	collisionSequence = nil, -- Model, played at the point of impact
 	collisionGroup = nil, -- string, a group registered in this place
 
+	-- Whether striking something is the end of a particle. An impact that consumes
+	-- what made it suits a shard shattering where it lands; a particle that carries
+	-- on instead lives out its lifetime, and reports the first thing it strikes and
+	-- nothing after, so one cannot go off over and over inside whatever it hit.
+	destroyOnCollision = true,
+
 	emissionRate = 0, -- particles per second
 	burstCount = nil, -- one-shot particles emitted once when the first stage begins
 
@@ -191,8 +197,16 @@ local function stepParticles(dt)
 			local struck = strike(p)
 			if struck ~= nil then
 				playStrike(p, struck)
-				-- the strike is what ends this particle, in place of its lifetime
-				finished = true
+				if p.destroyOnCollision then
+					-- the strike is what ends this particle, in place of its lifetime
+					finished = true
+				else
+					-- It has struck, and that is the whole of what it had to report:
+					-- letting go of the effect is what stops it being tested again,
+					-- so a particle that carries on through the floor cannot set the
+					-- same impact off frame after frame on its way down.
+					p.collisionSequence = nil
+				end
 			end
 		end
 
@@ -445,6 +459,7 @@ function MeshParticleDriver:SpawnParticle()
 		collisionSequence = if self.collide then self.collisionSequence else nil,
 		collisionGroup = group,
 		collisionIgnore = host,
+		destroyOnCollision = self.destroyOnCollision,
 		lastPosition = origin,
 		baseSize = self.baseSize,
 		colorOverLifetime = self.colorOverLifetime,

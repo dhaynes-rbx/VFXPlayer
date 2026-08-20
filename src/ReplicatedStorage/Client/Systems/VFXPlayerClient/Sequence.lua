@@ -304,6 +304,10 @@ local function initMeshEmitter(seq, a)
 	md.collisionGroup = a:GetAttribute("CollisionGroup")
 	md.collisionSequence = collisionSequenceTemplate(a)
 
+	-- an impact consumes the particle unless the author has said otherwise, which
+	-- is how it behaved before there was anything to say
+	md.destroyOnCollision = a:GetAttribute("DestroyOnCollision") ~= false
+
 	md.emissionRate = a:GetAttribute("EmissionRate") or 0
 	md.burstCount = a:GetAttribute("BurstCount")
 

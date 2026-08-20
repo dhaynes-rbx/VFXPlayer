@@ -504,6 +504,7 @@ local MESH_EMITTER_DEFAULTS = {
 	BurstCount = 0,
 	Collide = false,
 	CollisionGroup = "Default",
+	DestroyOnCollision = true,
 	EmissionRate = 0,
 	InitialVelocity = Vector3.zero,
 	ParticleLifetime = NumberRange.new(1, 1),
