@@ -16,6 +16,7 @@ local Studio = settings().Studio
 
 local Fields = require(script.Parent:WaitForChild("VFXEditorFields"))
 local SequenceEditor = require(script.Parent:WaitForChild("VFXSequenceEditor"))
+local TextureBrowser = require(script.Parent:WaitForChild("VFXTextureBrowser"))
 
 --the runtime's own timeline builder, so the bar the editor draws is sequenced by
 --the same code that plays it
@@ -167,6 +168,10 @@ local ROW_BUTTON_SIZE = ROW_HEIGHT - 6
 --field's edge it sits
 local SWATCH_SIZE = ROW_HEIGHT - 10
 local SWATCH_INSET = 3
+--A texture needs enough area to read as artwork rather than as an icon. The
+--parameter row grows to the preview while ordinary rows keep their compact
+--single-line height.
+local TEXTURE_PREVIEW_HEIGHT = 72
 
 --Studio's own disclosure triangle, from the artwork its own collapsible sections
 --use. Drawn in white, so unlike most of Studio's icons it ships once for both themes
@@ -2125,6 +2130,37 @@ function VFXEditor.Create(plugin: Plugin)
 		swatch.Activated:Connect(open)
 	end
 
+	--Texture ContentIds are strings to Roblox, but typing an id says nothing
+	--about the image it resolves to. Show the image itself and open a browser of
+	--every texture already assigned to a ParticleEmitter in the place.
+	local function fillTextureEditor(container: Frame, value: string, commit: (any) -> (), title: string)
+		local preview = Instance.new("ImageButton")
+		preview.Name = "TexturePreview"
+		preview.Position = UDim2.fromOffset(0, 2)
+		preview.Size = UDim2.new(1, 0, 0, TEXTURE_PREVIEW_HEIGHT)
+		preview.BackgroundColor3 = theme.inputBackground
+		preview.BorderColor3 = theme.inputBorder
+		preview.AutoButtonColor = true
+		preview.Image = value
+		preview.ScaleType = Enum.ScaleType.Fit
+		preview.Parent = container
+
+		if value == "" then
+			local empty = Instance.new("TextLabel")
+			empty.Size = UDim2.fromScale(1, 1)
+			empty.BackgroundTransparency = 1
+			empty.Font = Enum.Font.SourceSans
+			empty.TextSize = TEXT_SIZE
+			empty.TextColor3 = theme.dimText
+			empty.Text = "No texture"
+			empty.Parent = preview
+		end
+
+		preview.Activated:Connect(function()
+			TextureBrowser.Open(plugin, title, value, commit)
+		end)
+	end
+
 	local function fillBooleanEditor(container: Frame, value: boolean, commit: (any) -> ())
 		local button = makeValueButton(tostring(value))
 		button.Parent = container
@@ -2259,7 +2295,10 @@ function VFXEditor.Create(plugin: Plugin)
 			return
 		end
 
-		if kind == "instance" then
+		if kind == "texture" then
+			fillTextureEditor(container, value, commit, title or "Texture")
+			return
+		elseif kind == "instance" then
 			fillInstanceEditor(container, value, commit)
 			return
 		end
@@ -2948,7 +2987,7 @@ function VFXEditor.Create(plugin: Plugin)
 			for _, propertyName in propertyNames do
 				local value, ok = readProperty(emitter, propertyName)
 				if ok and not shadowed[propertyName] then
-					fileRow(propertyName, propertyName, value, nil, function(edited)
+					fileRow(propertyName, propertyName, value, if propertyName == "Texture" then "texture" else nil, function(edited)
 						commitProperty(emitter, propertyName, edited)
 					end)
 				end
@@ -3192,6 +3231,7 @@ function VFXEditor.Create(plugin: Plugin)
 	function controller:Destroy()
 		closeDropdown()
 		SequenceEditor.Destroy()
+		TextureBrowser.Destroy()
 		disconnectEmitterConnections()
 		for _, connection in connections do
 			connection:Disconnect()
