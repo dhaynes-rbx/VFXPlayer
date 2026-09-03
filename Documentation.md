@@ -173,6 +173,8 @@ Particles emit while the sequence is playing (i.e. up to the sequence `Duration`
 | `TransparencyOverParticleLifetime` | `NumberSequence` | The particle's `Transparency`, evaluated over its lifetime. Omit to leave the template's transparency unchanged. |
 | `RotationMin` | `Vector3` | Minimum initial rotation as Euler angles in **degrees**. Defaults to `(0,0,0)`. |
 | `RotationMax` | `Vector3` | Maximum initial rotation as Euler angles in **degrees**. Each particle's initial rotation is sampled uniformly per-axis between `RotationMin` and `RotationMax`. Defaults to `(0,0,0)`. |
+| `InitialVelocity` | `Vector3` | Launch velocity in studs per second, in **world space**, given to each particle as it spawns. Defaults to `(0,0,0)`. |
+| `SpreadAngle` | `Vector2` | Random angular spread in **degrees** around the two axes perpendicular to `InitialVelocity`, matching `ParticleEmitter.SpreadAngle`. Each component is the full width of the spread (half either way), so `(0, 0)` leaves the launch alone, `(360, 0)` emits in a circle, and `(360, 360)` emits in every direction. The cone is aimed by `InitialVelocity`; its two axes follow the attachment. Defaults to `(0, 0)`. |
 | `Anchored` | `boolean` | If `true`, particles are anchored and ignore physics; if `false` (default), particles are unanchored and fall under gravity. |
 | `Collide` | `boolean` | If `true`, particles physically collide with other geometry; if `false` (default), they pass through everything. |
 

@@ -1,5 +1,6 @@
 local VFXPlayerClient = {}
 
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -9,7 +10,19 @@ local Sequence = require(ReplicatedStorage.Client.Systems.VFXPlayerClient.Sequen
 -- Playing sequences are advanced by a single shared Heartbeat loop that only
 -- runs while something is playing.
 local activeSequences = {}
+local activeSequenceRootParentRefs: { [Model]: number } = {}
 local heartbeatConnection = nil
+
+local function releaseRootParent(rootParent: Model?)
+	if rootParent == nil then
+		return
+	end
+	activeSequenceRootParentRefs[rootParent] -= 1
+	if activeSequenceRootParentRefs[rootParent] <= 0 then
+		activeSequenceRootParentRefs[rootParent] = nil
+		rootParent:Destroy()
+	end
+end
 
 local function pruneActiveSequences()
 	for i = #activeSequences, 1, -1 do
@@ -32,6 +45,18 @@ local function stepSequences(deltaTime: number)
 	local i = 1
 	while i <= #activeSequences do
 		local s = activeSequences[i]
+
+		--An effect played inside something else -- a mesh particle carrying a
+		--sequence of its own -- ends when whatever carried it is destroyed. A
+		--looping one has nothing else to retire it, so without this copies would
+		--gather for as long as particles kept spawning. Whatever destroyed the model
+		--owns it, so there is nothing to destroy here.
+		if s.model == nil or not s.model:IsDescendantOf(game) then
+			table.remove(activeSequences, i)
+			releaseRootParent(s.rootParent)
+			continue
+		end
+
 		s.elapsed += deltaTime
 
 		if s.elapsed > s.duration then
@@ -44,6 +69,7 @@ local function stepSequences(deltaTime: number)
 				if s.destroyModelOnComplete and s.model ~= nil then
 					s.model:Destroy()
 				end
+				releaseRootParent(s.rootParent)
 			end
 		else
 			s:Update(s.elapsed)
@@ -63,7 +89,7 @@ local function ensurePlaybackRunning()
 	end
 end
 
-local function startSequence(model, destroyModelOnComplete)
+local function startSequence(model, rootParent: Model?, destroyModelOnComplete)
 	local newSeq = Sequence:new()
 	newSeq.model = model
 	newSeq.elapsed = 0
@@ -75,6 +101,10 @@ local function startSequence(model, destroyModelOnComplete)
 	newSeq:Init()
 
 	table.insert(activeSequences, newSeq)
+	if rootParent ~= nil then
+		newSeq.rootParent = rootParent
+		activeSequenceRootParentRefs[rootParent] = (activeSequenceRootParentRefs[rootParent] or 0) + 1
+	end
 	ensurePlaybackRunning()
 
 	return newSeq
@@ -83,10 +113,11 @@ end
 --play a VFXSequence model that is already placed in the world. The model is
 --left in place when playback completes.
 function VFXPlayerClient.PlaySequence(model)
-	return startSequence(model, false)
+	return startSequence(model, nil, false)
 end
 
---put a copy of `template` into the world at `cframe`, ready to be played
+--put a copy of `template` into the world at `cframe`, ready to be played.
+--note: we should consider unification with other copy spawning methods
 local function spawnCopy(template: Model, cframe: CFrame)
 	local instance = template:Clone()
 	-- position before parenting so the copy never renders at the template's spot
@@ -107,8 +138,26 @@ end
 function VFXPlayerClient.PlayVFXFromTemplate(template: Model, cframe: CFrame)
 	local instance = spawnCopy(template, cframe)
 
-	local looping = instance:GetAttribute("Looping") == true
-	startSequence(instance, not looping)
+	local hadAnySequence: boolean = false
+	-- Is the Instance itself the sequence?
+	if CollectionService:HasTag(instance, "VFXSequence") then
+		local looping = instance:GetAttribute("Looping") == true
+		startSequence(instance, nil, not looping)
+		hadAnySequence = true
+	else
+		-- If not, assume it is a container for direct sequence children
+		for _, child in ipairs(instance:GetChildren()) do
+			if CollectionService:HasTag(child, "VFXSequence") then
+				local looping = child:GetAttribute("Looping") == true
+				startSequence(child, instance, looping)
+				hadAnySequence = true
+			end
+		end
+	end
+
+	if not hadAnySequence then
+		warn(`No VFXSequence tag found in instance {instance:GetFullName()}, nothing to play!`)
+	end
 
 	return instance
 end
@@ -124,7 +173,7 @@ function VFXPlayerClient.PlayVFXOnce(template: Model, cframe: CFrame)
 	--the copy really is a one-shot, and says so, so that anything reading it later
 	--sees what it is being played as
 	instance:SetAttribute("Looping", false)
-	startSequence(instance, true)
+	startSequence(instance, nil, true)
 
 	return instance
 end
@@ -132,7 +181,7 @@ end
 --assumed to be already placed in the world / workspace (environment vfx)
 function VFXPlayerClient.PlayVFX(instance: Model)
 	local looping = instance:GetAttribute("Looping") == true
-	startSequence(instance, not looping)
+	startSequence(instance, nil, not looping)
 end
 
 --[[

@@ -295,9 +295,11 @@ local function initMeshEmitter(seq, a)
 	md.rotationMax = a:GetAttribute("RotationMax")
 
 	md.initialVelocity = a:GetAttribute("InitialVelocity")
+	md.spreadAngle = a:GetAttribute("SpreadAngle")
 
 	md.anchored = a:GetAttribute("Anchored") == true
 	md.collide = a:GetAttribute("Collide") == true
+	md.moveWithParent = a:GetAttribute("MoveWithParent") == true
 
 	-- read whether or not Collide is set, so that turning Collide on is all it
 	-- takes to start playing the effect the author has already pointed at

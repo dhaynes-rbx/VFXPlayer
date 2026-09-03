@@ -24,8 +24,15 @@ local MeshParticleDriver = {
 	-- and carries on from there, either by physics or by hand; see SpawnParticle.
 	initialVelocity = nil,
 
+	-- Vector2 of angles in degrees, the same cone a ParticleEmitter's SpreadAngle
+	-- draws around EmissionDirection. Each particle's launch is randomly offset
+	-- within it; see sampleLaunchVelocity.
+	spreadAngle = nil,
+
 	anchored = false,
 	collide = false,
+	-- Whether the mesh part should follow the pivot of its first ancestor part
+	moveWithParent = false,
 
 	-- A VFX sequence template, cloned and played wherever a particle strikes
 	-- something, and the collision group the particles belong to, which is what
@@ -41,6 +48,11 @@ local MeshParticleDriver = {
 	-- nothing after, so one cannot go off over and over inside whatever it hit.
 	destroyOnCollision = true,
 
+	-- Whether the mesh being emitted is an effect in its own right, worked out from
+	-- the template the first time one is spawned and remembered from then on; see
+	-- templateCarriesSequence.
+	carriesSequence = nil,
+
 	emissionRate = 0, -- particles per second
 	burstCount = nil, -- one-shot particles emitted once when the first stage begins
 
@@ -52,9 +64,12 @@ local MeshParticleDriver = {
 	lastElapsed = 0,
 }
 
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+
+local VFX_SEQUENCE_TAG = "VFXSequence"
 
 local Utility = require(ReplicatedStorage.Client.Systems.VFXPlayerClient.Utility)
 
@@ -171,6 +186,114 @@ local function playStrike(p, result)
 	VFXPlayerClient.PlayVFXOnce(p.collisionSequence, surfaceFrame(result.Position, result.Normal))
 end
 
+--The outermost sequences held inside `root`, which are the ones worth playing. A
+--sequence nested inside another is already driven by the sequence around it --
+--Sequence:Init picks up every emitter below it, however deep -- so playing it a
+--second time would leave two drivers writing the one emitter.
+local function outermostSequences(root)
+	local found = {}
+	local stack = { root }
+
+	while #stack > 0 do
+		local inst = table.remove(stack)
+		if CollectionService:HasTag(inst, VFX_SEQUENCE_TAG) then
+			table.insert(found, inst)
+		else
+			for _, child in inst:GetChildren() do
+				table.insert(stack, child)
+			end
+		end
+	end
+
+	return found
+end
+
+--Whether a copy of `template` would carry an effect worth playing. Worked out on
+--the template rather than on each particle, and remembered, since nearly every
+--mesh carries none and walking one per particle to find that out again is a cost
+--every emitter would pay.
+--
+--A sequence is run against a length of its own, so one without a Duration cannot
+--be played at all: the player compares elapsed time against it directly. Those
+--are refused here, once, rather than as each particle spawns -- at an emission
+--rate of any size that would be a warning every frame.
+local function templateCarriesSequence(emitter, template)
+	local playable = false
+
+	for _, carried in outermostSequences(template) do
+		if typeof(carried:GetAttribute("Duration")) == "number" then
+			playable = true
+		else
+			warn(
+				"MeshEmitter '"
+					.. emitter:GetFullName()
+					.. "' emits a mesh carrying '"
+					.. carried.Name
+					.. "', which is tagged "
+					.. VFX_SEQUENCE_TAG
+					.. " but has no Duration; nothing of it will play"
+			)
+		end
+	end
+
+	return playable
+end
+
+--Play the effects a particle carries, where they stand. A mesh may be authored as
+--an effect in its own right -- a shard trailing sparks -- and a copy of it arrives
+--holding sequences that nothing else would ever start: a particle lives in a
+--folder of its own that no sequence walks.
+--
+--They are played in place rather than copied somewhere, so that each follows the
+--particle it belongs to, and they end with it: the particle is destroyed when its
+--lifetime runs out, and the player lets go of any sequence whose model has left
+--the world.
+local function playCarriedSequences(part)
+	--Playing a sequence is the player's job and the player is built on top of this
+	--driver, so requiring it at the top of this file would be a cycle. By the time
+	--a particle exists the player is loaded, and this is no more than a lookup in
+	--the module cache.
+	local VFXPlayerClient = require(ReplicatedStorage.Client.Systems.VFXPlayerClient)
+
+	for _, carried in outermostSequences(part) do
+		if typeof(carried:GetAttribute("Duration")) == "number" then
+			VFXPlayerClient.PlaySequence(carried)
+		end
+	end
+end
+
+--Everything a particle is built from besides the part the driver holds, each with
+--the place it keeps relative to that part.
+--
+--Roblox moves parts one at a time. A template built from more than one part -- a
+--mesh with an emitter mounted on it, say -- would otherwise fly off as a root part
+--alone and leave the rest of itself standing where it was cloned from, at the
+--template's own feet, so that every particle's trimmings pile up in the one spot
+--while the meshes travel off without them.
+--
+--Read off the copy before it is moved, while it still holds the layout it was
+--authored with.
+local function carriedParts(part)
+	local carried = {}
+	for _, d in part:GetDescendants() do
+		if d:IsA("BasePart") then
+			table.insert(carried, { part = d, offset = part.CFrame:ToObjectSpace(d.CFrame) })
+		end
+	end
+	return carried
+end
+
+--Move a particle as the one rigid thing it is, keeping the layout it was authored
+--with. Size is not carried this way: a particle that grows over its life grows the
+--part the driver holds, and anything mounted on it keeps the size and the place it
+--was authored at.
+local function placeRigidly(part, carried, cframe)
+	part.CFrame = cframe
+	for _, mounted in carried do
+		mounted.part.CFrame = cframe * mounted.offset
+	end
+end
+
 --advance, animate, and cull every live particle; runs once per frame
 local function stepParticles(dt)
 	-- the pull physics would be applying, for the particles the driver is moving
@@ -191,7 +314,7 @@ local function stepParticles(dt)
 				if p.falls then
 					p.velocity += gravityStep
 				end
-				p.part.CFrame += p.velocity * dt
+				placeRigidly(p.part, p.carried, p.part.CFrame + p.velocity * dt)
 			end
 
 			local struck = strike(p)
@@ -207,6 +330,12 @@ local function stepParticles(dt)
 					-- same impact off frame after frame on its way down.
 					p.collisionSequence = nil
 				end
+			end
+
+			-- stick to the parent part when MoveWithParent is set; this overrides
+			-- any velocity applied above, matching the authored follow behaviour
+			if p.moveWithPart then
+				placeRigidly(p.part, p.carried, p.moveWithPart.CFrame)
 			end
 		end
 
@@ -342,6 +471,34 @@ local function samplePointInPart(part)
 	)
 end
 
+--Aim `velocity` within the two-axis cone `spreadAngle` describes, matching
+--ParticleEmitter.SpreadAngle. X and Y are the full widths in degrees of the
+--random offset around the two axes perpendicular to the launch -- so each is
+--spread half either way, and 360 on one axis comes round to a full circle
+--exactly as it does on a ParticleEmitter. The cone is aimed in the world by the
+--velocity itself; its two axes follow the emitter, so a fan of (45, 0) can be
+--turned with the attachment without changing where the cone is pointed.
+local function sampleLaunchVelocity(emitter, velocity, spreadAngle)
+	if velocity == nil then
+		return nil
+	end
+	if spreadAngle == nil or (spreadAngle.X == 0 and spreadAngle.Y == 0) then
+		return velocity
+	end
+
+	local worldCF = emitter.WorldCFrame
+	local localVel = worldCF:VectorToObjectSpace(velocity)
+	local speed = localVel.Magnitude
+	if speed == 0 then
+		return velocity
+	end
+
+	local look = CFrame.lookAt(Vector3.zero, localVel)
+	local rx = math.rad((math.random() - 0.5) * spreadAngle.X)
+	local ry = math.rad((math.random() - 0.5) * spreadAngle.Y)
+	return worldCF:VectorToWorldSpace((look * CFrame.Angles(rx, ry, 0)).LookVector * speed)
+end
+
 --randomly sample an initial rotation between the min/max Euler angles (degrees)
 local function sampleRotation(rotationMin, rotationMax)
 	if rotationMin == nil and rotationMax == nil then
@@ -362,6 +519,11 @@ function MeshParticleDriver:SpawnParticle()
 	end
 
 	local part = template:Clone()
+
+	-- read before anything is moved, while the copy still holds the layout the
+	-- template was authored with; see carriedParts
+	local carried = carriedParts(part)
+
 	part.Anchored = self.anchored
 	part.CanCollide = self.collide
 	-- particles never participate in touch/spatial queries, for efficiency. What a
@@ -371,12 +533,26 @@ function MeshParticleDriver:SpawnParticle()
 	part.CanTouch = false
 	part.CanQuery = false
 
+	-- Whatever is mounted on a particle is treated exactly as the particle is: it is
+	-- one object as far as the effect is concerned. Anchoring especially, since a
+	-- mounted part left unanchored under an anchored particle would simply fall out
+	-- of it the moment the simulation was running.
+	for _, mounted in carried do
+		mounted.part.Anchored = self.anchored
+		mounted.part.CanCollide = self.collide
+		mounted.part.CanTouch = false
+		mounted.part.CanQuery = false
+	end
+
 	-- the group is worth setting whether or not anything is struck, since it is
 	-- also what governs the particle's own collisions once physics has it
 	local group = "Default"
 	if self.collisionGroup ~= nil then
 		group = resolveCollisionGroup(self.collisionGroup)
 		part.CollisionGroup = group
+		for _, mounted in carried do
+			mounted.part.CollisionGroup = group
+		end
 	end
 
 	local lifetime = self.lifetimeMin
@@ -392,17 +568,20 @@ function MeshParticleDriver:SpawnParticle()
 	-- part that is not a volume anyone means: its Size is the whole world's.
 	-- An emitter parented to anything else has only its own position to emit from.
 	local host = self.emitter.Parent
+	local moveWithPart = nil
 	local origin
 	if host ~= nil and host:IsA("BasePart") and not host:IsA("Terrain") then
 		origin = host.CFrame * samplePointInPart(host)
+		moveWithPart = host
 	else
 		origin = self.emitter.WorldPosition
+		moveWithPart = self.emitter:FindFirstAncestorWhichIsA("BasePart")
 	end
 
 	-- Only the position is taken from the volume. A particle's own rotation is
 	-- sampled apart from it, so turning the emitter's part moves where particles
 	-- appear without turning the particles themselves.
-	part.CFrame = CFrame.new(origin) * sampleRotation(self.rotationMin, self.rotationMax)
+	placeRigidly(part, carried, CFrame.new(origin) * sampleRotation(self.rotationMin, self.rotationMax))
 
 	-- apply the t = 0 state before parenting to avoid a one-frame pop
 	if self.sizeOverLifetime ~= nil then
@@ -417,12 +596,36 @@ function MeshParticleDriver:SpawnParticle()
 
 	part.Parent = getParticleContainer()
 
+	-- Physics moves whole assemblies, and the parts of a template are not one
+	-- assembly until they are joined. Welding what is mounted on a particle to the
+	-- particle itself is what keeps it in one piece once physics has it, and is why
+	-- the launch velocity set below reaches all of it. A particle the driver carries
+	-- by hand is moved rigidly instead and needs no join.
+	if #carried > 0 and RunService:IsRunning() and not part.Anchored then
+		for _, mounted in carried do
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = part
+			weld.Part1 = mounted.part
+			weld.Parent = part
+		end
+	end
+
+	-- An effect the mesh carries is started once the particle is in the world, so
+	-- that it plays where the particle is rather than where the template sits
+	if self.carriesSequence == nil then
+		self.carriesSequence = templateCarriesSequence(self.emitter, template)
+	end
+	if self.carriesSequence then
+		playCarriedSequences(part)
+	end
+
 	-- Physics moves a particle only when the simulation is running and the particle
 	-- is not anchored. Neither holds in the editor, which plays effects with the
 	-- simulation stopped, and the second never holds for an anchored particle
 	-- anywhere. So whenever physics is not going to carry the velocity, the driver
 	-- carries it instead, and an authored velocity means the same thing wherever the
 	-- effect is played.
+	local launchVelocity = sampleLaunchVelocity(self.emitter, self.initialVelocity, self.spreadAngle)
 	local velocity = nil
 	local falls = false
 
@@ -430,24 +633,26 @@ function MeshParticleDriver:SpawnParticle()
 		-- Set after parenting rather than alongside the state above: velocity
 		-- belongs to the assembly a part is part of, and a part outside the world is
 		-- not in one yet.
-		if self.initialVelocity ~= nil then
-			part.AssemblyLinearVelocity = self.initialVelocity
+		if launchVelocity ~= nil then
+			part.AssemblyLinearVelocity = launchVelocity
 		end
 	elseif not part.Anchored then
 		-- Standing in for physics rather than doing something else: this particle
 		-- would be falling if the simulation were running, so it falls here too and
 		-- the editor shows what the game will.
-		velocity = self.initialVelocity or Vector3.zero
+		velocity = launchVelocity or Vector3.zero
 		falls = true
-	elseif self.initialVelocity ~= nil then
+	elseif launchVelocity ~= nil then
 		-- An anchored particle is never touched by physics, so its velocity is a
 		-- steady drift at the speed it was given, the same in the editor as in the
 		-- game: the way to author motion that does not fall.
-		velocity = self.initialVelocity
+		velocity = launchVelocity
 	end
 
 	table.insert(activeParticles, {
 		part = part,
+		carried = carried,
+		moveWithPart = if self.moveWithParent then moveWithPart else nil,
 		elapsed = 0,
 		lifetime = lifetime,
 		velocity = velocity,

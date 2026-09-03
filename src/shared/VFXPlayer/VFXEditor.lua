@@ -25,6 +25,9 @@ local Utility = require(ReplicatedStorage.Client.Systems.VFXPlayerClient.Utility
 local VFX_SEQUENCE_TAG = "VFXSequence"
 local MESH_EMITTER_TAG = "MeshEmitter"
 
+--what an effect made from the picker is called until it is renamed
+local NEW_SEQUENCE_NAME = "NewVFXSequence"
+
 local HEADER_HEIGHT = 26
 local ROW_HEIGHT = 22
 local TEXT_SIZE = 14
@@ -311,6 +314,15 @@ local function focusExtents(sequence: Instance): (CFrame?, Vector3?)
 	return sequence:GetPivot(), Vector3.zero
 end
 
+--How far back from a box of `size` the camera sits once the viewport is framed on
+--it, which is the gap the Focus Viewport button leaves between the two.
+--ZoomToExtents fits the box's bounding sphere into the field of view, so the same
+--trigonometry says where a new effect goes: made at this distance from the camera,
+--it is already as framed as pressing the button on it would have left it.
+local function focusDistance(fieldOfView: number, size: Vector3): number
+	return (size.Magnitude / 2) / math.tan(math.rad(fieldOfView) / 2)
+end
+
 --Somewhere inside `sequence` that a new emitter of `kind` can live. A sequence's
 --root is a Model, and none of the three classes renders parented straight to one,
 --so an emitter has to join whatever the effect already hangs its others off. The
@@ -516,6 +528,7 @@ local MESH_EMITTER_DEFAULTS = {
 	RotationMax = Vector3.zero,
 	RotationMin = Vector3.zero,
 	SizeMultiplier = 1,
+	SpreadAngle = Vector2.zero,
 }
 
 --What a newly added stage attribute starts at: whatever leaves playback exactly as
@@ -989,6 +1002,54 @@ function VFXEditor.Create(plugin: Plugin)
 	sequencePadding.PaddingRight = UDim.new(0, 4)
 	sequencePadding.Parent = sequenceButton
 
+	--Where a new effect is put: out in front of the camera, at the distance the
+	--viewport would be framed on it from, so that it is made in view rather than at
+	--the world origin and however far from wherever the author is working. An effect
+	--with nothing in it yet occupies no space, and framing one falls back on
+	--FOCUS_MIN_EXTENT, so that is the box the distance is worked out from.
+	--
+	--Only the position is taken from the camera. The pivot is left square with the
+	--world, since it is what an emitter added later is placed by, and an effect
+	--tipped over to match whatever angle the camera happened to be at is not what
+	--asking for one in front of it meant.
+	local function newSequencePivot(): CFrame
+		local camera = Workspace.CurrentCamera
+		if camera == nil then
+			return CFrame.new()
+		end
+
+		local distance = focusDistance(camera.FieldOfView, Vector3.one * FOCUS_MIN_EXTENT)
+		return CFrame.new(camera.CFrame.Position + camera.CFrame.LookVector * distance)
+	end
+
+	--A new effect, which is the one thing the picker cannot offer from what is
+	--already in the place: an effect is a tagged model, and a model nobody has
+	--tagged yet is not one, so without this there is nothing in an empty list to
+	--start an effect from.
+	--
+	--Made empty -- what it holds is what Add Emitter is for -- but not bare: the
+	--attributes every effect needs are authored in the same recording, so making one
+	--is a single thing to undo rather than two, and the panes have something to show
+	--the moment it is picked.
+	local function createSequence()
+		local created = nil
+
+		local ok = recorded("Create VFX sequence", function()
+			created = Instance.new("Model")
+			created.Name = NEW_SEQUENCE_NAME
+			created.WorldPivot = newSequencePivot()
+			--tagged before it is parented, so that it already counts as an effect by
+			--the time anything watching the tag hears about it
+			CollectionService:AddTag(created, VFX_SEQUENCE_TAG)
+			created.Parent = Workspace
+			ensureAttributes(created)
+		end)
+
+		if ok and created ~= nil then
+			selectSequence(created)
+		end
+	end
+
 	--Every tagged effect, by name, with its parent named after it so that two
 	--effects called the same thing can still be told apart, which is what the old
 	--column's dimmed second half was for. Gathered when the list is opened rather
@@ -1000,7 +1061,11 @@ function VFXEditor.Create(plugin: Plugin)
 			return a.Name < b.Name
 		end)
 
-		local items = {}
+		--Above the effects rather than below them, where it is in the same place
+		--whatever the place holds: at the bottom of a list of thirty it would be off
+		--the end of the menu, and it is the entry an empty list is opened for.
+		local items = { { text = "Create New Sequence...", activate = createSequence } }
+
 		for _, sequence in sequences do
 			local parent = sequence.Parent
 			table.insert(items, {
@@ -1011,7 +1076,7 @@ function VFXEditor.Create(plugin: Plugin)
 			})
 		end
 
-		if #items == 0 then
+		if #sequences == 0 then
 			table.insert(items, { text = "Nothing is tagged 'VFXSequence'." })
 		end
 

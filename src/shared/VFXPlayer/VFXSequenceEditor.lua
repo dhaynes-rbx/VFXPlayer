@@ -78,9 +78,9 @@ local REMOVE_WIDTH = 66
 local CURSOR_SIZE = 9
 local RING_WIDTH = 1
 
---How much of the plot's own height is added beyond a value dragged or typed past
---an edge of it, so that what has just been moved to the edge ends up inside the
---plot rather than sitting on its border.
+--How much of the plot's own height is added beyond a value typed past an edge of
+--it, so that what has just been given that value ends up inside the plot rather
+--than sitting on its border.
 local RANGE_EPSILON = 0.05
 --The span given to a curve that has no range of its own -- every keypoint at the
 --same value -- since a plot of no height can be neither read nor dragged in. One
@@ -244,8 +244,9 @@ end
 -- What the plot's height spans, and the two conversions between a value and its
 -- place on it. The range is held rather than worked out from the keypoints each
 -- time, because it is the author's to set: it is framed to the curve when the
--- window opens, widened when something is dragged past an edge, and typed
--- outright into the Min and Max fields.
+-- window opens, widened to take in a value typed past an edge, and typed
+-- outright into the Min and Max fields. Dragging never moves it, so the plot
+-- stays still under the mouse.
 local function rangeSpan(): number
 	return math.max(state.rangeMax - state.rangeMin, RANGE_FLOOR)
 end
@@ -258,11 +259,11 @@ local function alphaToValue(alpha: number): number
 	return state.rangeMin + alpha * rangeSpan()
 end
 
--- Widen the plot to take `value` in. Never narrows it: what the author has framed
--- stays framed, and a keypoint dragged back from an edge does not drag the edge
--- along behind it. The epsilon is what leaves the keypoint inside the plot rather
--- than on its border, where half its marker and one of its envelope handles would
--- be off the end.
+-- Widen the plot to take `value` in, for a value typed into the fields: what has
+-- been asked for outright is shown rather than left off the end of the plot.
+-- Never narrows it, so what the author has framed stays framed. The epsilon is
+-- what leaves the keypoint inside the plot rather than on its border, where half
+-- its marker and one of its envelope handles would be off the end.
 local function accommodate(value: number)
 	local margin = rangeSpan() * RANGE_EPSILON
 
@@ -434,8 +435,9 @@ local function dragTo(index: number, time: number, value: number?)
 	end
 
 	if value ~= nil then
-		--the range is widened to take a value in before it gets here, so this
-		--bounds the value by the plot rather than the plot by the value
+		--a drag reaches as far as the plot does and no further: the range is the
+		--author's, so the value is bounded by the plot rather than the plot by
+		--the value
 		keypoint.value = math.clamp(value, state.rangeMin, state.rangeMax)
 	end
 
@@ -446,17 +448,14 @@ end
 -- dragging the line above or below the keypoint to wherever the band should
 -- reach, so what the mouse is holding is the edge of the band and what is stored
 -- is its distance from the value.
+--
+-- The band is symmetrical, so the edge opposite the mouse can run off the plot
+-- from a keypoint sitting near the far side of it. It is left to run off: the
+-- range belongs to the author, and Min, Max or the Env field are how the rest of
+-- the band is brought back into view.
 local function dragEnvelopeTo(index: number, value: number)
 	local keypoint = state.keypoints[index]
 	keypoint.envelope = math.abs(value - keypoint.value)
-
-	--The band is symmetrical, so widening the edge under the mouse widens the one
-	--opposite by as much, and that one can leave the plot from a keypoint sitting
-	--near the far side of it. The whole band is what the envelope means, so the
-	--whole band is kept in view.
-	accommodate(keypoint.value + keypoint.envelope)
-	accommodate(keypoint.value - keypoint.envelope)
-
 	render()
 end
 
@@ -697,20 +696,13 @@ local function build()
 
 		local position = surfaceLocalPosition(input)
 		local time = math.clamp(position.X / size.X, 0, 1)
-		--Allowed past the ends of the plot, because a drag carried past an edge is
-		--how the range is widened and the value has to be able to say it went
-		--there. Only just past, though: the mouse is tracked on the whole window
-		--and could be a long way outside, and how far out it strayed should not
-		--decide how far the range jumps. Each move beyond an edge asks for one
-		--epsilon more, however far beyond it the mouse actually is.
-		local alpha = math.clamp(1 - position.Y / size.Y, -RANGE_EPSILON, 1 + RANGE_EPSILON)
+		--Held to the plot, since the mouse is tracked on the whole window and a
+		--drag carried off the top or bottom means the edge it was carried past
+		--rather than however far outside the mouse went.
+		local alpha = math.clamp(1 - position.Y / size.Y, 0, 1)
 		local value = if isColorKind() then nil else alphaToValue(alpha)
 
 		dragMoved = true
-
-		if value ~= nil then
-			accommodate(value)
-		end
 
 		--an envelope is dragged up and down only: it belongs to a keypoint that
 		--stays where it is
