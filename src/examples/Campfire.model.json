@@ -1,0 +1,211 @@
+{
+  "ClassName": "Model",
+  "Properties": {
+    "Tags": ["VFXSequence"],
+    "Attributes": {
+      "Duration": { "Float64": 4 },
+      "Looping": { "Bool": true },
+      "PlayOnStart": { "Bool": true }
+    }
+  },
+  "Children": [
+    {
+      "Name": "Emitter",
+      "ClassName": "Part",
+      "Properties": {
+        "Anchored": true,
+        "CanCollide": false,
+        "CanTouch": false,
+        "CanQuery": false,
+        "Transparency": 1,
+        "Size": [2, 1, 2],
+        "CFrame": {
+          "CFrame": {
+            "position": [0, 1, 0],
+            "orientation": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+          }
+        }
+      },
+      "Children": [
+        {
+          "Name": "Flames",
+          "ClassName": "ParticleEmitter",
+          "Properties": {
+            "Texture": "rbxasset://textures/particles/fire_main.dds",
+            "Rate": 40,
+            "LightEmission": 1,
+            "Lifetime": { "NumberRange": [0.6, 1.2] },
+            "Speed": { "NumberRange": [2, 4] },
+            "SpreadAngle": [15, 15],
+            "Acceleration": [0, 3, 0],
+            "Size": {
+              "NumberSequence": {
+                "keypoints": [
+                  { "time": 0, "value": 1.5, "envelope": 0 },
+                  { "time": 1, "value": 0.2, "envelope": 0 }
+                ]
+              }
+            },
+            "Transparency": {
+              "NumberSequence": {
+                "keypoints": [
+                  { "time": 0, "value": 0.2, "envelope": 0 },
+                  { "time": 1, "value": 1, "envelope": 0 }
+                ]
+              }
+            },
+            "Color": {
+              "ColorSequence": {
+                "keypoints": [
+                  { "time": 0, "color": [1, 0.8, 0.3] },
+                  { "time": 1, "color": [1, 0.25, 0.05] }
+                ]
+              }
+            },
+            "Attributes": {
+              "StandDuration": { "Float64": 0.5 },
+              "HoldDuration": { "Float64": 0.75 },
+              "HoldLoopCount": { "Float64": 4 },
+              "DecayDuration": { "Float64": 0.5 },
+              "StandEmissionScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 0, "envelope": 0 },
+                    { "time": 1, "value": 1, "envelope": 0 }
+                  ]
+                }
+              },
+              "StandSizeScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 0.4, "envelope": 0 },
+                    { "time": 1, "value": 1, "envelope": 0 }
+                  ]
+                }
+              },
+              "HoldSizeScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 1, "envelope": 0 },
+                    { "time": 0.25, "value": 1.15, "envelope": 0 },
+                    { "time": 0.5, "value": 0.95, "envelope": 0 },
+                    { "time": 0.75, "value": 1.1, "envelope": 0 },
+                    { "time": 1, "value": 1, "envelope": 0 }
+                  ]
+                }
+              },
+              "DecayEmissionScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 1, "envelope": 0 },
+                    { "time": 1, "value": 0, "envelope": 0 }
+                  ]
+                }
+              },
+              "DecaySizeScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 1, "envelope": 0 },
+                    { "time": 1, "value": 0.5, "envelope": 0 }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "Name": "Embers",
+          "ClassName": "ParticleEmitter",
+          "Properties": {
+            "Texture": "rbxasset://textures/particles/sparkles_main.dds",
+            "Rate": 6,
+            "LightEmission": 1,
+            "Lifetime": { "NumberRange": [1.5, 2.5] },
+            "Speed": { "NumberRange": [3, 6] },
+            "SpreadAngle": [30, 30],
+            "Size": {
+              "NumberSequence": {
+                "keypoints": [
+                  { "time": 0, "value": 0.15, "envelope": 0 },
+                  { "time": 1, "value": 0, "envelope": 0 }
+                ]
+              }
+            },
+            "Color": {
+              "ColorSequence": {
+                "keypoints": [
+                  { "time": 0, "color": [1, 0.6, 0.2] },
+                  { "time": 1, "color": [1, 0.6, 0.2] }
+                ]
+              }
+            },
+            "Attributes": {
+              "StandDuration": { "Float64": 0.5 },
+              "StandBurstCount": { "Float64": 25 },
+              "HoldDuration": { "Float64": 3 },
+              "DecayDuration": { "Float64": 0.5 },
+              "DecayEmissionScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 1, "envelope": 0 },
+                    { "time": 1, "value": 0, "envelope": 0 }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "Name": "Glow",
+          "ClassName": "PointLight",
+          "Properties": {
+            "Brightness": 3,
+            "Range": 14,
+            "Color": [1, 0.6, 0.25],
+            "Attributes": {
+              "StandDuration": { "Float64": 0.5 },
+              "HoldDuration": { "Float64": 0.75 },
+              "HoldLoopCount": { "Float64": 4 },
+              "DecayDuration": { "Float64": 0.5 },
+              "StandBrightnessScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 0, "envelope": 0 },
+                    { "time": 1, "value": 1, "envelope": 0 }
+                  ]
+                }
+              },
+              "HoldBrightnessScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 1, "envelope": 0 },
+                    { "time": 0.25, "value": 0.8, "envelope": 0 },
+                    { "time": 0.5, "value": 1.1, "envelope": 0 },
+                    { "time": 0.75, "value": 0.85, "envelope": 0 },
+                    { "time": 1, "value": 1, "envelope": 0 }
+                  ]
+                }
+              },
+              "DecayBrightnessScaleOverDuration": {
+                "NumberSequence": {
+                  "keypoints": [
+                    { "time": 0, "value": 1, "envelope": 0 },
+                    { "time": 1, "value": 0, "envelope": 0 }
+                  ]
+                }
+              },
+              "DecayTintOverDuration": {
+                "ColorSequence": {
+                  "keypoints": [
+                    { "time": 0, "color": [1, 1, 1] },
+                    { "time": 1, "color": [1, 0.5, 0.3] }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

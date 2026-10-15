@@ -14,4 +14,16 @@ Next, open `VFXPlayer.rbxlx` in Roblox Studio and start the Rojo server:
 rojo serve
 ```
 
+## VFX Editor plugin
+To install the VFX Editor into Studio's Plugins folder, use:
+
+```bash
+rojo build plugin.project.json --plugin VFXPlayer.rbxm
+```
+
+Restart Studio to get the **VFXPlayer** toolbar. The editor drives playback with the runtime in `ReplicatedStorage.Client`, so use it in a place built from this project.
+
+## Example
+`Workspace.VFXExamples.Campfire` is a looping sequence showing all three stages, a looping `Hold`, a burst, and light tinting. Preview it in the VFX Editor, or play it from a LocalScript with `VFXPlayerClient.PlayVFX(workspace.VFXExamples.Campfire)`.
+
 For more help, check out [the Rojo documentation](https://rojo.space/docs).

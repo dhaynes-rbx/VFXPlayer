@@ -1,0 +1,6 @@
+{
+  "name": "VFXPlayer",
+  "tree": {
+    "$path": "src/shared/VFXPlayer"
+  }
+}
