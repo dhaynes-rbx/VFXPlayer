@@ -4,44 +4,80 @@
 	A floating picker for ParticleEmitter textures already used in the open
 	place. Roblox does not expose Studio's asset picker to plugins, so the useful
 	local library for VFX authoring is built by scanning every ParticleEmitter
-	and showing its Texture as an image.
+	and showing its Texture as an image. Uploaded assets also show the name from
+	the marketplace underneath the image, with the numeric id beneath that.
 ]]
 
 local VFXTextureBrowser = {}
 
+local MarketplaceService = game:GetService("MarketplaceService")
+
 local PADDING = 8
 local HEADER_HEIGHT = 24
 local CARD_WIDTH = 112
-local CARD_HEIGHT = 126
+local CARD_HEIGHT = 132
 local PREVIEW_INSET = 5
-local LABEL_HEIGHT = 24
+local NAME_HEIGHT = 16
+local ID_HEIGHT = 14
+local LABEL_HEIGHT = NAME_HEIGHT + ID_HEIGHT
 
 local widget = nil
 local ui = nil
 local state = nil
 local connections = {}
 
+-- Uploaded asset names, keyed by numeric id. Lookups yield and can fail, so a
+-- hit here lets a rebuilt picker (theme change, reopen) show the name immediately.
+local assetNames: { [string]: string } = {}
+
 local function color(guideColor: Enum.StudioStyleGuideColor, modifier: Enum.StudioStyleGuideModifier?): Color3
 	return settings().Studio.Theme:GetColor(guideColor, modifier)
 end
 
--- Asset URLs have accumulated several spellings over time. Use the numeric id
--- as the identity when one is present so the same image does not get two cards,
--- while retaining the original ContentId when the card is chosen.
-local function textureKey(texture: string): string
-	local id = string.match(texture, "^rbxassetid://(%d+)")
+-- Asset URLs have accumulated several spellings over time. The numeric id is the
+-- identity when one is present so the same image does not get two cards, while
+-- the original ContentId is what a chosen card writes back.
+local function textureAssetId(texture: string): string?
+	return string.match(texture, "^rbxassetid://(%d+)")
 		or string.match(texture, "[?&]id=(%d+)")
 		or string.match(texture, "^https?://www%.roblox%.com/asset/%?id=(%d+)")
+end
 
+local function textureKey(texture: string): string
+	local id = textureAssetId(texture)
 	return if id ~= nil then "id:" .. id else string.lower(texture)
 end
 
 local function textureLabel(texture: string): string
-	local id = string.match(texture, "^rbxassetid://(%d+)")
-		or string.match(texture, "[?&]id=(%d+)")
-		or string.match(texture, "^https?://www%.roblox%.com/asset/%?id=(%d+)")
+	return textureAssetId(texture) or texture
+end
 
-	return id or texture
+-- The name the asset was uploaded with lives on the marketplace, not in the
+-- ContentId. `apply` runs immediately on a cache hit, later once the lookup
+-- returns, or never: a missing or private asset errors, and callers keep
+-- showing the numeric id. A caller whose labels may be destroyed in the
+-- meantime has to check for that itself.
+local function resolveAssetName(assetId: string, apply: (string) -> ())
+	local cached = assetNames[assetId]
+	if cached ~= nil then
+		apply(cached)
+		return
+	end
+
+	task.spawn(function()
+		local ok, info = pcall(function()
+			return MarketplaceService:GetProductInfoAsync(tonumber(assetId), Enum.InfoType.Asset)
+		end)
+		if not ok or type(info) ~= "table" then
+			return
+		end
+		local name = info.Name
+		if type(name) ~= "string" or name == "" then
+			return
+		end
+		assetNames[assetId] = name
+		apply(name)
+	end)
 end
 
 local function collectTextures(current: string): { string }
@@ -160,11 +196,38 @@ local function build()
 		preview.ScaleType = Enum.ScaleType.Fit
 		preview.Parent = card
 
-		local label = makeLabel(textureLabel(texture))
-		label.Position = UDim2.new(0, PREVIEW_INSET, 1, -(LABEL_HEIGHT + PREVIEW_INSET))
-		label.Size = UDim2.new(1, -PREVIEW_INSET * 2, 0, LABEL_HEIGHT)
-		label.TextXAlignment = Enum.TextXAlignment.Center
-		label.Parent = card
+		local captionTop = -(LABEL_HEIGHT + PREVIEW_INSET)
+		local assetId = textureAssetId(texture)
+		if assetId == nil then
+			local label = makeLabel(texture)
+			label.Position = UDim2.new(0, PREVIEW_INSET, 1, captionTop)
+			label.Size = UDim2.new(1, -PREVIEW_INSET * 2, 0, LABEL_HEIGHT)
+			label.TextXAlignment = Enum.TextXAlignment.Center
+			label.Parent = card
+		else
+			local nameLabel = makeLabel(assetNames[assetId] or assetId)
+			nameLabel.Position = UDim2.new(0, PREVIEW_INSET, 1, captionTop)
+			nameLabel.Size = UDim2.new(1, -PREVIEW_INSET * 2, 0, NAME_HEIGHT)
+			nameLabel.TextXAlignment = Enum.TextXAlignment.Center
+			nameLabel.Parent = card
+
+			local idLabel = makeLabel(assetId)
+			idLabel.Position = UDim2.new(0, PREVIEW_INSET, 1, captionTop + NAME_HEIGHT)
+			idLabel.Size = UDim2.new(1, -PREVIEW_INSET * 2, 0, ID_HEIGHT)
+			idLabel.TextSize = 12
+			idLabel.TextXAlignment = Enum.TextXAlignment.Center
+			idLabel.TextColor3 = color(Enum.StudioStyleGuideColor.DimmedText)
+			idLabel.Visible = assetNames[assetId] ~= nil
+			idLabel.Parent = card
+
+			resolveAssetName(assetId, function(name)
+				if nameLabel.Parent == nil then
+					return
+				end
+				nameLabel.Text = name
+				idLabel.Visible = true
+			end)
+		end
 
 		card.Activated:Connect(function()
 			state.commit(texture)
@@ -172,6 +235,9 @@ local function build()
 		end)
 	end
 end
+
+VFXTextureBrowser.AssetId = textureAssetId
+VFXTextureBrowser.ResolveAssetName = resolveAssetName
 
 function VFXTextureBrowser.Open(pluginRef: Plugin, title: string, current: string, onCommit: (string) -> ())
 	if widget == nil then

@@ -7,7 +7,15 @@ game:GetService("StarterPlayer")
 --ribbon is left with the one button that opens that window.
 local editorButton = toolbar:CreateButton("VFX Editor", "Inspect the VFX Sequences in this place", "rbxasset://studio_svg_textures/Shared/InsertableObjects/Dark/Standard/ParticleEmitter.png")
 
-local Sequence = require(ReplicatedStorage.Client.Systems.VFXPlayerClient.Sequence)
+--Plugins start as soon as the place opens, which can be before the runtime is in
+--it: a published place finishing its load, or Rojo syncing it in. The runtime's
+--modules index one another directly, so all of them have to be present first.
+local runtime = ReplicatedStorage:WaitForChild("Client"):WaitForChild("Systems"):WaitForChild("VFXPlayerClient")
+for _, name in { "Sequence", "Utility", "LightDriver", "ParticleDriver", "MeshParticleDriver" } do
+    runtime:WaitForChild(name)
+end
+
+local Sequence = require(runtime.Sequence)
 local VFXEditor = require(script.Parent:WaitForChild("VFXEditor"))
 
 local activeSequences = {}

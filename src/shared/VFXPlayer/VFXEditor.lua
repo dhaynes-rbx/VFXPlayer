@@ -2224,6 +2224,52 @@ function VFXEditor.Create(plugin: Plugin)
 		preview.Activated:Connect(function()
 			TextureBrowser.Open(plugin, title, value, commit)
 		end)
+
+		--The uploaded name under the preview, with the id kept at the right-hand end
+		--so two uploads sharing a name stay distinguishable. Until the marketplace
+		--answers, and for good if it cannot, the id stands in for the name.
+		local assetId = TextureBrowser.AssetId(value)
+		if assetId == nil then
+			return
+		end
+
+		local captionTop = 2 + TEXTURE_PREVIEW_HEIGHT + 2
+		local idWidth = TextService:GetTextSize(assetId, TEXT_SIZE - 2, Enum.Font.SourceSans, Vector2.new(1000, 100)).X
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Name = "TextureName"
+		nameLabel.Position = UDim2.fromOffset(0, captionTop)
+		nameLabel.Size = UDim2.new(1, -(idWidth + 6), 0, ROW_HEIGHT - 4)
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Font = Enum.Font.SourceSans
+		nameLabel.TextSize = TEXT_SIZE
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		nameLabel.TextColor3 = theme.subText
+		nameLabel.Text = assetId
+		nameLabel.Parent = container
+
+		local idLabel = Instance.new("TextLabel")
+		idLabel.Name = "TextureId"
+		idLabel.AnchorPoint = Vector2.new(1, 0)
+		idLabel.Position = UDim2.new(1, 0, 0, captionTop)
+		idLabel.Size = UDim2.fromOffset(idWidth, ROW_HEIGHT - 4)
+		idLabel.BackgroundTransparency = 1
+		idLabel.Font = Enum.Font.SourceSans
+		idLabel.TextSize = TEXT_SIZE - 2
+		idLabel.TextXAlignment = Enum.TextXAlignment.Right
+		idLabel.TextColor3 = theme.dimText
+		idLabel.Text = assetId
+		idLabel.Visible = false
+		idLabel.Parent = container
+
+		TextureBrowser.ResolveAssetName(assetId, function(name)
+			if nameLabel.Parent == nil then
+				return
+			end
+			nameLabel.Text = name
+			idLabel.Visible = true
+		end)
 	end
 
 	local function fillBooleanEditor(container: Frame, value: boolean, commit: (any) -> ())
