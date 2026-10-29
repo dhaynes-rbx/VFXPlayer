@@ -1,3 +1,5 @@
+-- TODO CHAMP-959: Review rapid iteration VFX.
+
 local VFXPlayerClient = {}
 
 local CollectionService = game:GetService("CollectionService")
@@ -6,6 +8,10 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Sequence = require(ReplicatedStorage.Client.Systems.VFXPlayerClient.Sequence)
+local Utility = require(ReplicatedStorage.Client.Systems.VFXPlayerClient.Utility)
+
+local TINT_CURVE_SUFFIX = "TintOverDuration"
+local MESH_EMITTER_TAG = "MeshEmitter"
 
 -- Playing sequences are advanced by a single shared Heartbeat loop that only
 -- runs while something is playing.
@@ -57,7 +63,7 @@ local function stepSequences(deltaTime: number)
 			continue
 		end
 
-		s.elapsed += deltaTime
+		s.elapsed += deltaTime * s.speed
 
 		if s.elapsed > s.duration then
 			if s.looping then
@@ -65,6 +71,9 @@ local function stepSequences(deltaTime: number)
 				s:Init()
 				i += 1
 			else
+				--same as the editor: duration may end on the last stage, and
+				--Rate would otherwise keep emitting after this driver is gone
+				s:Finish()
 				table.remove(activeSequences, i)
 				if s.destroyModelOnComplete and s.model ~= nil then
 					s.model:Destroy()
@@ -72,6 +81,7 @@ local function stepSequences(deltaTime: number)
 				releaseRootParent(s.rootParent)
 			end
 		else
+			-- TODO CHAMP-947: Apply a held projectile copy's Hold stage once and skip VFXPlayer driver Update while it loops (G09X-001)
 			s:Update(s.elapsed)
 			i += 1
 		end
@@ -89,7 +99,14 @@ local function ensurePlaybackRunning()
 	end
 end
 
-local function startSequence(model, rootParent: Model?, destroyModelOnComplete)
+local function startSequence(
+	model,
+	rootParent: Model?,
+	destroyModelOnComplete,
+	scale: number?,
+	tint: Color3?,
+	speed: number?
+)
 	local newSeq = Sequence:new()
 	newSeq.model = model
 	newSeq.elapsed = 0
@@ -97,6 +114,10 @@ local function startSequence(model, rootParent: Model?, destroyModelOnComplete)
 	newSeq.looping = model:GetAttribute("Looping")
 	--playback bookkeeping: only instances spawned by PlayVFX are ours to destroy
 	newSeq.destroyModelOnComplete = destroyModelOnComplete
+	newSeq.scale = scale or 1
+	newSeq.scaleRoot = rootParent or model
+	newSeq.tint = tint
+	newSeq.speed = speed or 1
 
 	newSeq:Init()
 
@@ -120,6 +141,12 @@ end
 --note: we should consider unification with other copy spawning methods
 local function spawnCopy(template: Model, cframe: CFrame)
 	local instance = template:Clone()
+	-- Copies are only visuals, so no ray, roll or touch on this client should ever hit one
+	for _, part in instance:QueryDescendants("BasePart") do
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+	end
 	-- position before parenting so the copy never renders at the template's spot
 	instance:PivotTo(cframe)
 	--A copy exists only while it is playing, so it is nothing the place should ever
@@ -131,25 +158,106 @@ local function spawnCopy(template: Model, cframe: CFrame)
 	return instance
 end
 
+--ScaleTo may leave emitter speed and acceleration alone; scaling both keeps each particle's path in shape
+local function scaleCopy(instance: Model, scale: number)
+	local emitterMotions: { [ParticleEmitter]: { speed: NumberRange, acceleration: Vector3 } } = {}
+	for _, descendant in instance:GetDescendants() do
+		if descendant:IsA("ParticleEmitter") then
+			emitterMotions[descendant] = { speed = descendant.Speed, acceleration = descendant.Acceleration }
+		end
+	end
+
+	instance:ScaleTo(instance:GetScale() * scale)
+
+	for emitter, motion in emitterMotions do
+		if emitter.Speed == motion.speed then
+			emitter.Speed = NumberRange.new(motion.speed.Min * scale, motion.speed.Max * scale)
+		end
+		if emitter.Acceleration == motion.acceleration then
+			emitter.Acceleration = motion.acceleration * scale
+		end
+	end
+end
+
+--Tint curves multiply the base colour, so they keep only their brightness or they would pull the hue back
+local function recolorAttributes(instance: Instance, tint: Color3)
+	for name, value in instance:GetAttributes() do
+		local isTintCurve = string.sub(name, -#TINT_CURVE_SUFFIX) == TINT_CURVE_SUFFIX
+		if typeof(value) == "ColorSequence" then
+			instance:SetAttribute(
+				name,
+				if isTintCurve
+					then Utility.DesaturateColorSequence(value)
+					else Utility.RecolorColorSequence(value, tint)
+			)
+		elseif typeof(value) == "Color3" and not isTintCurve then
+			instance:SetAttribute(name, Utility.RecolorColor(value, tint))
+		end
+	end
+end
+
+--recolour before any sequence starts, since its drivers capture base colours on Init
+local function recolorCopy(instance: Model, tint: Color3)
+	for _, descendant in instance:GetDescendants() do
+		recolorAttributes(descendant, tint)
+
+		-- These classes share no base class with Color, so the write goes through any
+		if descendant:IsA("ParticleEmitter") or descendant:IsA("Beam") or descendant:IsA("Trail") then
+			local colored: any = descendant
+			colored.Color = Utility.RecolorColorSequence(colored.Color, tint)
+		elseif descendant:IsA("Light") or descendant:IsA("BasePart") then
+			local colored: any = descendant
+			colored.Color = Utility.RecolorColor(colored.Color, tint)
+		end
+	end
+end
+
 --spawn a copy of a VFX template at `cframe` and play it, returning the spawned
 --instance. A one-shot template's copy is destroyed once playback completes; a
 --template with Looping set plays continuously, so destroy the returned instance
---when you want it to stop.
-function VFXPlayerClient.PlayVFXFromTemplate(template: Model, cframe: CFrame)
+--when you want it to stop. `scale` multiplies the template's authored size,
+--`tint` moves every colour in it onto the tint's hue, `skipMeshEmitters`
+--plays it without its mesh particles (such as Blizzard's falling shards), and
+--`speed` is the playback rate, so 0.5 stretches the effect to twice its length.
+function VFXPlayerClient.PlayVFXFromTemplate(
+	template: Model,
+	cframe: CFrame,
+	scale: number?,
+	tint: Color3?,
+	skipMeshEmitters: boolean?,
+	speed: number?
+)
 	local instance = spawnCopy(template, cframe)
+
+	--scale before any sequence starts, since its drivers capture base sizes on Init
+	if scale ~= nil then
+		scaleCopy(instance, scale)
+	end
+
+	if tint ~= nil then
+		recolorCopy(instance, tint)
+	end
+
+	if skipMeshEmitters then
+		for _, descendant in instance:GetDescendants() do
+			if descendant:IsA("Attachment") and CollectionService:HasTag(descendant, MESH_EMITTER_TAG) then
+				descendant:Destroy()
+			end
+		end
+	end
 
 	local hadAnySequence: boolean = false
 	-- Is the Instance itself the sequence?
 	if CollectionService:HasTag(instance, "VFXSequence") then
 		local looping = instance:GetAttribute("Looping") == true
-		startSequence(instance, nil, not looping)
+		startSequence(instance, nil, not looping, scale, tint, speed)
 		hadAnySequence = true
 	else
 		-- If not, assume it is a container for direct sequence children
 		for _, child in ipairs(instance:GetChildren()) do
 			if CollectionService:HasTag(child, "VFXSequence") then
 				local looping = child:GetAttribute("Looping") == true
-				startSequence(child, instance, looping)
+				startSequence(child, instance, looping, scale, tint, speed)
 				hadAnySequence = true
 			end
 		end
@@ -184,27 +292,6 @@ function VFXPlayerClient.PlayVFX(instance: Model)
 	startSequence(instance, nil, not looping)
 end
 
---[[
-local function onVFXSequenceLoaded(s)
-    print("onVFXSequenceLoaded")
-    if s and s:IsDescendantOf(workspace) and s:GetAttribute("PlayOnStart") == true then
-        print("Playing Sequence "..s.Name)
-        VFXPlayerClient.PlayVFX(s)
-    end
-end
---]]
-
-function VFXPlayerClient.start()
-	--print("Initializing VFXPlayer...")
-
-	--[[
-    --play all hand-placed environment VFX (which should be tagged as PlayOnStart / Looping)
-    local allSeqs = CollectionService:GetTagged("VFXSequence")
-    for _,s in allSeqs do
-        task.spawn(onVFXSequenceLoaded, s)
-    end--]]
-
-	--CollectionService:GetInstanceAddedSignal("VFXSequence"):Connect(onVFXSequenceLoaded)
-end
+function VFXPlayerClient.start() end
 
 return VFXPlayerClient

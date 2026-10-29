@@ -13,6 +13,7 @@ local MeshParticleDriver = {
 	lifetimeMax = 1,
 
 	colorOverLifetime = nil, -- ColorSequence
+	tint = nil, -- Color3 recolouring parts the template authored, when colorOverLifetime is unset
 	sizeOverLifetime = nil, -- NumberSequence (uniform scale multiplier)
 	transparencyOverLifetime = nil, -- NumberSequence
 
@@ -31,6 +32,9 @@ local MeshParticleDriver = {
 
 	anchored = false,
 	collide = false,
+	-- When present, Champlain snaps the particle to the ground plus this offset
+	-- each update. Omitted here; see the commented getGroundPositionBelow require.
+	-- groundOffset = nil,
 	-- Whether the mesh part should follow the pivot of its first ancestor part
 	moveWithParent = false,
 
@@ -72,6 +76,11 @@ local Workspace = game:GetService("Workspace")
 local VFX_SEQUENCE_TAG = "VFXSequence"
 
 local Utility = require(ReplicatedStorage.Client.Systems.VFXPlayerClient.Utility)
+-- GroundOffset is omitted. Champlain snaps each particle to the ground through
+-- ReplicatedStorage.Utility.getGroundPositionBelow, and that raycast depends on
+-- the EnvironmentOnly collision group, which this place does not register.
+-- local getGroundPositionBelow = require(ReplicatedStorage.Utility.getGroundPositionBelow)
+-- local GROUND_RAYCAST_DISTANCE = 50
 
 -- Particles are simulated by a single, module-wide Heartbeat loop rather than
 -- per-driver. This lets particles keep animating and get destroyed on schedule
@@ -306,15 +315,35 @@ local function stepParticles(dt)
 		p.elapsed += dt
 		local t = p.elapsed / p.lifetime
 
-		local finished = t >= 1 or p.part.Parent == nil
+		-- a particle stuck to its part goes with it, so an effect destroyed early takes it down too
+		local finished = t >= 1 or p.part.Parent == nil or (p.moveWithPart ~= nil and p.moveWithPart.Parent == nil)
 
 		if not finished then
 			-- carried by hand only when physics is not carrying it; see SpawnParticle
-			if p.velocity ~= nil then
+
+			local rigidLocation: CFrame? = nil
+			if p.moveWithPart then
+				-- stick to the parent part when MoveWithParent is set; this overrides
+				-- any velocity applied above, matching the authored follow behaviour
+				rigidLocation = p.moveWithPart.CFrame
+			elseif p.velocity ~= nil then
 				if p.falls then
 					p.velocity += gravityStep
 				end
-				placeRigidly(p.part, p.carried, p.part.CFrame + p.velocity * dt)
+				rigidLocation = p.part.CFrame + p.velocity * dt
+			end
+
+			if rigidLocation then
+				-- Ground snap omitted. Champlain applies GroundOffset here:
+				-- if p.groundOffset then
+				-- 	local groundPos = getGroundPositionBelow(rigidLocation.Position, GROUND_RAYCAST_DISTANCE)
+				-- 	if groundPos ~= nil then
+				-- 		rigidLocation = CFrame.new(groundPos + Vector3.new(0, p.groundOffset, 0))
+				-- 			* rigidLocation.Rotation
+				-- 	end
+				-- end
+
+				placeRigidly(p.part, p.carried, rigidLocation)
 			end
 
 			local struck = strike(p)
@@ -330,12 +359,6 @@ local function stepParticles(dt)
 					-- same impact off frame after frame on its way down.
 					p.collisionSequence = nil
 				end
-			end
-
-			-- stick to the parent part when MoveWithParent is set; this overrides
-			-- any velocity applied above, matching the authored follow behaviour
-			if p.moveWithPart then
-				placeRigidly(p.part, p.carried, p.moveWithPart.CFrame)
 			end
 		end
 
@@ -478,16 +501,18 @@ end
 --exactly as it does on a ParticleEmitter. The cone is aimed in the world by the
 --velocity itself; its two axes follow the emitter, so a fan of (45, 0) can be
 --turned with the attachment without changing where the cone is pointed.
-local function sampleLaunchVelocity(emitter, velocity, spreadAngle)
+local function sampleLaunchVelocity(worldCFrame, velocity, spreadAngle)
 	if velocity == nil then
 		return nil
 	end
+
+	-- If there is no spread, no randomness, just a static velocity in our world space
 	if spreadAngle == nil or (spreadAngle.X == 0 and spreadAngle.Y == 0) then
 		return velocity
 	end
 
-	local worldCF = emitter.WorldCFrame
-	local localVel = worldCF:VectorToObjectSpace(velocity)
+	-- InitialVelocity treated as local space, so it is transformed by the axes of the emitter
+	local localVel = velocity
 	local speed = localVel.Magnitude
 	if speed == 0 then
 		return velocity
@@ -496,7 +521,7 @@ local function sampleLaunchVelocity(emitter, velocity, spreadAngle)
 	local look = CFrame.lookAt(Vector3.zero, localVel)
 	local rx = math.rad((math.random() - 0.5) * spreadAngle.X)
 	local ry = math.rad((math.random() - 0.5) * spreadAngle.Y)
-	return worldCF:VectorToWorldSpace((look * CFrame.Angles(rx, ry, 0)).LookVector * speed)
+	return worldCFrame:VectorToWorldSpace((look * CFrame.Angles(rx, ry, 0)).LookVector * speed)
 end
 
 --randomly sample an initial rotation between the min/max Euler angles (degrees)
@@ -589,6 +614,11 @@ function MeshParticleDriver:SpawnParticle()
 	end
 	if self.colorOverLifetime ~= nil then
 		part.Color = Utility.EvalColorSequence(self.colorOverLifetime, 0)
+	elseif self.tint ~= nil then
+		part.Color = Utility.RecolorColor(part.Color, self.tint)
+		for _, mounted in carried do
+			mounted.part.Color = Utility.RecolorColor(mounted.part.Color, self.tint)
+		end
 	end
 	if self.transparencyOverLifetime ~= nil then
 		part.Transparency = Utility.EvalNumberSequence(self.transparencyOverLifetime, 0)
@@ -625,7 +655,8 @@ function MeshParticleDriver:SpawnParticle()
 	-- anywhere. So whenever physics is not going to carry the velocity, the driver
 	-- carries it instead, and an authored velocity means the same thing wherever the
 	-- effect is played.
-	local launchVelocity = sampleLaunchVelocity(self.emitter, self.initialVelocity, self.spreadAngle)
+	local initialCFrame = (moveWithPart and moveWithPart.CFrame) or self.emitter.WorldCFrame
+	local launchVelocity = sampleLaunchVelocity(initialCFrame, self.initialVelocity, self.spreadAngle)
 	local velocity = nil
 	local falls = false
 
@@ -653,6 +684,7 @@ function MeshParticleDriver:SpawnParticle()
 		part = part,
 		carried = carried,
 		moveWithPart = if self.moveWithParent then moveWithPart else nil,
+		-- groundOffset = self.groundOffset,
 		elapsed = 0,
 		lifetime = lifetime,
 		velocity = velocity,

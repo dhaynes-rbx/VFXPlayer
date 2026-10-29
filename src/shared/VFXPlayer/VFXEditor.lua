@@ -1,8 +1,9 @@
 --Studio-only inspector window for the VFX in a place, reading top to bottom: a
---band of playback controls, then the effect being edited, picked from everything
---tagged "VFXSequence"; then a timeline with a row per emitter inside it; then a pane
---of parameters, headed by the effect's own and followed by the native properties and
---attributes of whichever timeline row is selected.
+--band of playback controls, then a button that takes the Studio selection as the
+--effect and the picker for everything tagged "VFXSequence"; then a timeline with a
+--row per emitter inside it; then a pane of parameters, headed by the effect's own
+--and followed by the native properties and attributes of whichever timeline row is
+--selected.
 local VFXEditor = {}
 
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
@@ -34,9 +35,13 @@ local TEXT_SIZE = 14
 local PADDING = 8
 --the playback band above the panes, and the size of a button in it
 local TOOLBAR_HEIGHT = 32
---the band under the buttons holding the one control that says which effect all of
---this is about, and the two bands together, which is what the timeline sits below
-local SELECTOR_HEIGHT = 28
+--the band under the buttons holding the control that takes the Studio selection
+--as the effect, and the one that picks an effect by name. The inset and the gap
+--are what keep the two the same height as a parameter row. The two bands together
+--are what the timeline sits below.
+local SELECTOR_INSET = 3
+local SELECTOR_GAP = 4
+local SELECTOR_HEIGHT = SELECTOR_INSET * 2 + ROW_HEIGHT * 2 + SELECTOR_GAP
 local CONTROLS_HEIGHT = TOOLBAR_HEIGHT + SELECTOR_HEIGHT
 --the buttons are square and carry nothing but their icon, with what each one does
 --in a tooltip rather than on its face
@@ -831,6 +836,9 @@ function VFXEditor.Create(plugin: Plugin)
 	--the selection changes
 	local emitterConnections = {}
 	local connections = {}
+	--Ancestry of whatever Studio has selected, so dragging a selection into or out
+	--of an effect updates the button without the selection itself changing.
+	local selectionWatchers = {}
 
 	local root = Instance.new("Frame")
 	root.Name = "Root"
@@ -981,26 +989,41 @@ function VFXEditor.Create(plugin: Plugin)
 	selectorBand.Parent = root
 
 	--Dressed as a field rather than a button, which is how the parameter rows that
-	--drop a list of their own read, and left where a title would be so that it
-	--names the window's subject as much as it chooses it.
-	local sequenceButton = Instance.new("TextButton")
-	sequenceButton.Name = "Picker"
-	sequenceButton.Position = UDim2.fromOffset(PADDING, (SELECTOR_HEIGHT - ROW_HEIGHT) // 2)
-	sequenceButton.Size = UDim2.new(1, -PADDING * 2, 0, ROW_HEIGHT)
-	sequenceButton.BackgroundColor3 = theme.inputBackground
-	sequenceButton.BorderColor3 = theme.inputBorder
-	sequenceButton.Font = Enum.Font.SourceSans
-	sequenceButton.TextSize = TEXT_SIZE
-	sequenceButton.TextColor3 = theme.text
-	sequenceButton.TextXAlignment = Enum.TextXAlignment.Left
-	sequenceButton.TextTruncate = Enum.TextTruncate.AtEnd
-	sequenceButton.Text = ""
-	sequenceButton.Parent = selectorBand
+	--drop a list of their own read.
+	local function makeSelectorButton(name: string, y: number): TextButton
+		local button = Instance.new("TextButton")
+		button.Name = name
+		button.Position = UDim2.fromOffset(PADDING, y)
+		button.Size = UDim2.new(1, -PADDING * 2, 0, ROW_HEIGHT)
+		button.BackgroundColor3 = theme.inputBackground
+		button.BorderColor3 = theme.inputBorder
+		button.Font = Enum.Font.SourceSans
+		button.TextSize = TEXT_SIZE
+		button.TextColor3 = theme.text
+		button.TextXAlignment = Enum.TextXAlignment.Left
+		button.TextTruncate = Enum.TextTruncate.AtEnd
+		button.Text = ""
+		button.Parent = selectorBand
 
-	local sequencePadding = Instance.new("UIPadding")
-	sequencePadding.PaddingLeft = UDim.new(0, 4)
-	sequencePadding.PaddingRight = UDim.new(0, 4)
-	sequencePadding.Parent = sequenceButton
+		local padding = Instance.new("UIPadding")
+		padding.PaddingLeft = UDim.new(0, 4)
+		padding.PaddingRight = UDim.new(0, 4)
+		padding.Parent = button
+
+		return button
+	end
+
+	--Takes the effect the Studio selection is in, when the selection names exactly
+	--one. It sits above the picker because it acts on whatever is already selected
+	--rather than offering a list of everything tagged.
+	local useSelectionButton = makeSelectorButton("UseSelection", SELECTOR_INSET)
+	useSelectionButton.Text = "Choose selected VFX sequence"
+	useSelectionButton.Active = false
+	useSelectionButton.AutoButtonColor = false
+
+	--Left where a title would be so that it names the window's subject as much as
+	--it chooses it.
+	local sequenceButton = makeSelectorButton("Picker", SELECTOR_INSET + ROW_HEIGHT + SELECTOR_GAP)
 
 	--Where a new effect is put: out in front of the camera, at the distance the
 	--viewport would be framed on it from, so that it is made in view rather than at
@@ -1083,8 +1106,48 @@ function VFXEditor.Create(plugin: Plugin)
 		return items
 	end
 
+	--The nearest effect an instance belongs to, which is itself when it carries the
+	--tag and otherwise the first tagged ancestor.
+	local function sequenceContaining(inst: Instance): Instance?
+		local current: Instance? = inst
+		while current ~= nil do
+			if CollectionService:HasTag(current, VFX_SEQUENCE_TAG) then
+				return current
+			end
+			current = current.Parent
+		end
+		return nil
+	end
+
+	--The Studio selection names one effect when every selected instance is that
+	--effect or lives inside it.
+	local function sequenceFromStudioSelection(): Instance?
+		local chosen: Instance? = nil
+		for _, inst in Selection:Get() do
+			local sequence = sequenceContaining(inst)
+			if sequence == nil then
+				return nil
+			end
+			if chosen == nil then
+				chosen = sequence
+			elseif chosen ~= sequence then
+				return nil
+			end
+		end
+		return chosen
+	end
+
 	sequenceButton.Activated:Connect(function()
 		openDropdown(sequenceButton, sequenceItems())
+	end)
+
+	useSelectionButton.Activated:Connect(function()
+		local sequence = sequenceFromStudioSelection()
+		if sequence == nil or sequence.Parent == nil or sequence == selectedSequence then
+			return
+		end
+
+		selectSequence(sequence)
 	end)
 
 	--The window owns the buttons but not the playback engine, so what they
@@ -1235,6 +1298,15 @@ function VFXEditor.Create(plugin: Plugin)
 		--rather than sitting there empty.
 		sequenceButton.Text = if sequence ~= nil then sequence.Name else "Choose a VFX sequence..."
 		sequenceButton.TextColor3 = if sequence ~= nil then theme.text else theme.dimText
+
+		--Active when the Studio selection is one effect, or lives entirely inside
+		--one: the effect itself, an emitter, or any other descendant. A selection
+		--that reaches outside that effect, or that reaches two of them, names none.
+		local fromSelection = sequenceFromStudioSelection()
+		local canChooseSelection = fromSelection ~= nil and fromSelection.Parent ~= nil
+		useSelectionButton.Active = canChooseSelection
+		useSelectionButton.AutoButtonColor = canChooseSelection
+		useSelectionButton.TextColor3 = if canChooseSelection then theme.text else theme.dimText
 	end
 
 	--Whatever room is left under the timeline, which is where the parameters go.
@@ -3195,6 +3267,8 @@ function VFXEditor.Create(plugin: Plugin)
 		selectorBand.BackgroundColor3 = theme.header
 		sequenceButton.BackgroundColor3 = theme.inputBackground
 		sequenceButton.BorderColor3 = theme.inputBorder
+		useSelectionButton.BackgroundColor3 = theme.inputBackground
+		useSelectionButton.BorderColor3 = theme.inputBorder
 
 		tooltip.BackgroundColor3 = theme.inputBackground
 		tooltip.BorderColor3 = theme.border
@@ -3290,7 +3364,32 @@ function VFXEditor.Create(plugin: Plugin)
 		end)
 	)
 
+	local function bindStudioSelection()
+		for _, connection in selectionWatchers do
+			connection:Disconnect()
+		end
+		table.clear(selectionWatchers)
+
+		for _, inst in Selection:Get() do
+			table.insert(
+				selectionWatchers,
+				inst.AncestryChanged:Connect(function()
+					if widget.Enabled then
+						updateToolbar()
+					end
+				end)
+			)
+		end
+
+		if widget.Enabled then
+			updateToolbar()
+		end
+	end
+
+	table.insert(connections, Selection.SelectionChanged:Connect(bindStudioSelection))
+
 	refreshAll()
+	bindStudioSelection()
 
 	local controller = {}
 
@@ -3344,6 +3443,10 @@ function VFXEditor.Create(plugin: Plugin)
 		SequenceEditor.Destroy()
 		TextureBrowser.Destroy()
 		disconnectEmitterConnections()
+		for _, connection in selectionWatchers do
+			connection:Disconnect()
+		end
+		table.clear(selectionWatchers)
 		for _, connection in connections do
 			connection:Disconnect()
 		end

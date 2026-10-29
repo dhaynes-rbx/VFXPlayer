@@ -173,7 +173,7 @@ Particles emit while the sequence is playing (i.e. up to the sequence `Duration`
 | `TransparencyOverParticleLifetime` | `NumberSequence` | The particle's `Transparency`, evaluated over its lifetime. Omit to leave the template's transparency unchanged. |
 | `RotationMin` | `Vector3` | Minimum initial rotation as Euler angles in **degrees**. Defaults to `(0,0,0)`. |
 | `RotationMax` | `Vector3` | Maximum initial rotation as Euler angles in **degrees**. Each particle's initial rotation is sampled uniformly per-axis between `RotationMin` and `RotationMax`. Defaults to `(0,0,0)`. |
-| `InitialVelocity` | `Vector3` | Launch velocity in studs per second, in **world space**, given to each particle as it spawns. Defaults to `(0,0,0)`. |
+| `InitialVelocity` | `Vector3` | Launch velocity in studs per second. With no `SpreadAngle`, the vector is world space. With a spread, it is local to the emitter (or to the followed part when `MoveWithParent` is set) and the cone is transformed into world space. Defaults to `(0,0,0)`. |
 | `SpreadAngle` | `Vector2` | Random angular spread in **degrees** around the two axes perpendicular to `InitialVelocity`, matching `ParticleEmitter.SpreadAngle`. Each component is the full width of the spread (half either way), so `(0, 0)` leaves the launch alone, `(360, 0)` emits in a circle, and `(360, 360)` emits in every direction. The cone is aimed by `InitialVelocity`; its two axes follow the attachment. Defaults to `(0, 0)`. |
 | `Anchored` | `boolean` | If `true`, particles are anchored and ignore physics; if `false` (default), particles are unanchored and fall under gravity. |
 | `Collide` | `boolean` | If `true`, particles physically collide with other geometry; if `false` (default), they pass through everything. |
@@ -185,3 +185,19 @@ Particles emit while the sequence is playing (i.e. up to the sequence `Duration`
 - Particles are parented to a `VFXMeshParticles` folder in `Workspace`, animated by a single shared per-frame loop, and `Destroy()`ed when their lifetime elapses — so there is no per-particle connection and no memory leak. The shared loop stops itself when no particles remain.
 - Because particle simulation is independent of the sequence, particles are not cleared when a sequence ends or loops; they simply live out their remaining lifetime.
 - A single-frame time step is clamped (to 0.1s) so a lag spike or tab-out cannot spawn a flood of particles at once.
+- `GroundOffset` is part of Champlain's mesh driver, which snaps a particle to terrain each frame. The read, the scale, and the snap are left commented out in this repository because that raycast depends on Champlain's `EnvironmentOnly` collision group.
+
+---
+
+## Playing a copy
+
+`VFXPlayerClient.PlayVFXFromTemplate(template, cframe, scale, tint, skipMeshEmitters, speed)` clones a template and plays it.
+
+| Argument | Effect |
+|----------|--------|
+| `scale` | Multiplies the copy's size. Particle speed and acceleration are scaled with it. A mesh template stored outside the copy is scaled by hand, and a falling particle's launch speed is scaled by the square root. |
+| `tint` | Moves colours in the copy onto the tint's hue while keeping their brightness. Tint curves are reduced to grey so they do not pull the hue back. |
+| `skipMeshEmitters` | Removes attachments tagged `MeshEmitter` before playback. |
+| `speed` | Playback rate. `0.5` stretches the effect to twice its length, including mesh-particle lifetimes. |
+
+The spawned copy is non-collidable, non-queryable, and non-touchable. `createHeldTemplate(template)` returns a clone whose Hold stage loops long enough that the copy keeps playing until something else destroys it.

@@ -10,6 +10,13 @@ local Sequence = {
 	elapsed = 0,
 	duration = -1,
 	looping = false,
+	--factor the copy was ScaleTo'd by; attributes and templates outside scaleRoot need it applied by hand
+	scale = 1,
+	scaleRoot = nil,
+	--Color3 the copy was recoloured to; mesh templates outside the copy need it applied per particle
+	tint = nil,
+	--playback rate; mesh particles live in real time, so their lifetimes are stretched by hand to match
+	speed = 1,
 	particleDrivers = {},
 	lightDrivers = {},
 	meshDrivers = {},
@@ -152,6 +159,11 @@ local function initParticleEmitter(seq, e)
 	pd.baseColor = baseValue(e, "Color", e.Color)
 	pd.baseTransparency = baseValue(e, "Transparency", e.Transparency)
 
+	--ScaleTo resized the native Size but not an authored override
+	if seq.scale ~= 1 and e:GetAttribute("BaseSize") ~= nil then
+		pd.baseSize = Utility.ScaleNumberSequence(pd.baseSize, seq.scale)
+	end
+
 	-- scalar multiplier applied to the base size sequence before stage size curves
 	local baseSizeMultiplier = e:GetAttribute("BaseSizeMultiplier")
 	if baseSizeMultiplier ~= nil then
@@ -279,6 +291,11 @@ local function initMeshEmitter(seq, a)
 		if sizeMultiplier ~= nil then
 			md.baseSize = md.baseSize * sizeMultiplier
 		end
+
+		--a template kept outside the copy was never ScaleTo'd with it
+		if seq.scale ~= 1 and not md.template:IsDescendantOf(seq.scaleRoot) then
+			md.baseSize = md.baseSize * seq.scale
+		end
 	end
 
 	local lifetime = a:GetAttribute("ParticleLifetime")
@@ -286,19 +303,36 @@ local function initMeshEmitter(seq, a)
 		md.lifetimeMin = lifetime.Min
 		md.lifetimeMax = lifetime.Max
 	end
+	md.lifetimeMin /= seq.speed
+	md.lifetimeMax /= seq.speed
 
 	md.colorOverLifetime = a:GetAttribute("ColorOverParticleLifetime")
+	-- A template inside the copy was already recoloured with the tint, and tinting it again would wash it out
+	md.tint = if md.template ~= nil and md.template:IsDescendantOf(seq.scaleRoot) then nil else seq.tint
 	md.sizeOverLifetime = a:GetAttribute("SizeOverParticleLifetime")
 	md.transparencyOverLifetime = a:GetAttribute("TransparencyOverParticleLifetime")
 
 	md.rotationMin = a:GetAttribute("RotationMin")
 	md.rotationMax = a:GetAttribute("RotationMax")
 
+	md.anchored = a:GetAttribute("Anchored") == true
+
+	--ScaleTo skips attributes; a falling particle's reach grows with speed squared, so it gets the square root
 	md.initialVelocity = a:GetAttribute("InitialVelocity")
+	if md.initialVelocity ~= nil then
+		local launchScale = if md.anchored then seq.scale else math.sqrt(seq.scale)
+		md.initialVelocity = md.initialVelocity * launchScale
+	end
 	md.spreadAngle = a:GetAttribute("SpreadAngle")
 
-	md.anchored = a:GetAttribute("Anchored") == true
 	md.collide = a:GetAttribute("Collide") == true
+	-- GroundOffset is omitted. Champlain snaps the particle to terrain through
+	-- ReplicatedStorage.Utility.getGroundPositionBelow, which raycasts in the
+	-- EnvironmentOnly collision group. That group is not part of this place.
+	-- md.groundOffset = a:GetAttribute("GroundOffset")
+	-- if md.groundOffset ~= nil then
+	-- 	md.groundOffset = md.groundOffset * seq.scale
+	-- end
 	md.moveWithParent = a:GetAttribute("MoveWithParent") == true
 
 	-- read whether or not Collide is set, so that turning Collide on is all it
@@ -376,6 +410,16 @@ function Sequence:Init()
 			local md = initMeshEmitter(self, d)
 			table.insert(self.meshDrivers, md)
 		end
+	end
+end
+
+--End a one-shot. Mesh emission only happens inside Update, so dropping the
+--sequence stops it. A ParticleEmitter does not: its Rate keeps spawning until
+--something writes 0, which a timeline freeze does only when the sequence
+--outlasts Stand/Hold/Decay.
+function Sequence:Finish()
+	for _, pd in self.particleDrivers do
+		pd:StopEmission()
 	end
 end
 

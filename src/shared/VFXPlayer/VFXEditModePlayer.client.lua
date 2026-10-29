@@ -29,6 +29,9 @@ local function PlaySequence(s)
     newSeq.startTime = pluginTime
     newSeq.duration = s:GetAttribute("Duration")
     newSeq.looping = s:GetAttribute("Looping")
+    newSeq.scale = 1
+    newSeq.scaleRoot = s
+    newSeq.speed = 1
 
     newSeq:Init()
 
@@ -179,7 +182,9 @@ task.spawn(function()
                     s:Init()
                     i += 1
                 else
-                    --print("killing effect")
+                    --the duration can land on the last stage, so freeze emission
+                    --before the driver is dropped
+                    s:Finish()
                     table.remove(activeSequences, i)
                 end
             else

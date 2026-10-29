@@ -92,6 +92,33 @@ function Utility.TintColorSequence(sequence: ColorSequence, tint: Color3)
 	return ColorSequence.new(newKeypoints)
 end
 
+-- Move a colour onto the tint's hue, keeping its brightness, so a white-hot core stays pale.
+function Utility.RecolorColor(color: Color3, tint: Color3): Color3
+	local tintHue, tintSaturation = tint:ToHSV()
+	local _, saturation, value = color:ToHSV()
+	return Color3.fromHSV(tintHue, saturation * tintSaturation, value)
+end
+
+function Utility.RecolorColorSequence(sequence: ColorSequence, tint: Color3): ColorSequence
+	local newKeypoints = {}
+	for i = 1, #sequence.Keypoints do
+		local kp = sequence.Keypoints[i]
+		table.insert(newKeypoints, ColorSequenceKeypoint.new(kp.Time, Utility.RecolorColor(kp.Value, tint)))
+	end
+	return ColorSequence.new(newKeypoints)
+end
+
+-- Reduce every keypoint to a grey of the same brightness.
+function Utility.DesaturateColorSequence(sequence: ColorSequence): ColorSequence
+	local newKeypoints = {}
+	for i = 1, #sequence.Keypoints do
+		local kp = sequence.Keypoints[i]
+		local _, _, value = kp.Value:ToHSV()
+		table.insert(newKeypoints, ColorSequenceKeypoint.new(kp.Time, Color3.new(value, value, value)))
+	end
+	return ColorSequence.new(newKeypoints)
+end
+
 -- Build a sequential stage timeline from an ordered list of stage definitions.
 --
 -- Each stage definition is a table: { name, delay, duration, loopCount, curves,

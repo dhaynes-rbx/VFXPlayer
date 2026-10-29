@@ -100,6 +100,15 @@ function ParticleDriver:BeginCycle()
 	self:HoldAtStart()
 end
 
+--stop spawning without rewinding the other properties. A one-shot sequence can
+--end on the last frame of a stage, before any later frame has frozen the
+--timeline and written Rate to 0. ParticleEmitter.Rate is engine state, so it
+--keeps emitting after the driver is dropped unless it is cleared here.
+--Particles already spawned keep the look the last Update wrote.
+function ParticleDriver:StopEmission()
+	self.emitter.Rate = 0
+end
+
 --apply a single stage's curve set at normalized time t; properties whose curve
 --is absent for this stage fall back to the emitter's base value.
 --when `suppressEmission` is true (a stage has elapsed and we are holding), the
